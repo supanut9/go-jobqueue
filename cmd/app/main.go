@@ -10,24 +10,37 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, relying on OS environment variables.")
+	}
+
+	cfg := infrastructure.LoadConfig()
+
 	// Setup Redis connection
-	redisClient := infrastructure.NewRedisClient()
+	redisClient := infrastructure.NewRedisClient(cfg.RedisAddr)
+	emailGateway := infrastructure.NewSMTPGateway(cfg.SMTP)
 
 	// Create repository and use case
-	repo := infrastructure.NewRedisJobRepository(redisClient)
-	enqueueUC := usecase.NewEnqueueJobUsecase(repo)
+	redisJobRepository := infrastructure.NewRedisJobRepository(redisClient)
+	emailExecutor := usecase.NewEmailJobExecutor(emailGateway)
+	enqueueJobUsecase := usecase.NewEnqueueJobUsecase(redisJobRepository)
+	dispatcher := usecase.NewJobDispatcher(map[string]usecase.Executor{
+		"send-email": emailExecutor,
+	})
+	processJobUsecase := usecase.NewProcessJobUsecase(redisJobRepository, dispatcher)
 
 	// Start worker in background
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go worker.NewWorker(repo).Start(ctx)
+	go worker.NewWorker(redisJobRepository, processJobUsecase).Start(ctx)
 
 	app := fiber.New()
-	handler := http.NewJobHandler(enqueueUC)
+	handler := http.NewJobHandler(enqueueJobUsecase)
 
 	// Register routes
 	app.Post("/jobs", handler.Enqueue)

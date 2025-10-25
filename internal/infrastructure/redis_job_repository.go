@@ -19,12 +19,18 @@ func NewRedisJobRepository(client *redis.Client) *RedisJobRepository {
 }
 
 func (r *RedisJobRepository) Enqueue(job *domain.Job) error {
+	ctx := context.Background()
+
 	data, err := json.Marshal(job)
 	if err != nil {
 		return err
 	}
 
-	return r.client.LPush(context.Background(), "jobqueue:jobs", data).Err()
+	if err := r.client.Set(ctx, "jobqueue:job:"+job.ID, data, 0).Err(); err != nil {
+		return err
+	}
+
+	return r.client.LPush(ctx, "jobqueue:jobs", data).Err()
 }
 
 func (r *RedisJobRepository) Dequeue() (*domain.Job, error) {
